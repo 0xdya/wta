@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+
+apps="$HOME/.local/share/applications"
+icons="$HOME/.local/share/icons/wta"
+
+usage() {
+    echo "Usage: wta name url [icon]"
+    echo "To remove: wta -r name"
+    exit 1
+}
+
+# اسم الملف: حروف لاتينية صغيرة وشرطات
+slugify() {
+    echo "$1" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'
+}
+
+# تحويل الرابط النسبي إلى رابط كامل
+full_url() {
+    case "$1" in
+        http*) echo "$1" ;;
+        //*) echo "https:$1" ;;
+        /*) echo "$origin$1" ;;
+        *) echo "$origin/$1" ;;
+    esac
+}
+
+# جلب href من وسم link حسب قيمة rel
+get_href() {
+    echo "$page" | tr '\n' ' ' | grep -oiE '<link[^>]*>' \
+        | grep -iE "rel=[\"']$1[\"']" | head -n 1 \
+        | sed -n "s/.*href=[\"']\([^\"']*\)[\"'].*/\1/p"
+}
+
+# تحميل الصورة وتحويلها إلى PNG
+try_icon() {
+    tmp=$(mktemp)
+    if [ -f "$1" ]; then
+        cp "$1" "$tmp"
+    else
+        curl -fsSL --max-time 10 -o "$tmp" "$1" 2>/dev/null
+    fi
+    magick "${tmp}[0]" -background none -resize 256x256 "$out" 2>/dev/null
+    status=$?
+    rm -f "$tmp"
+    [ $status -ne 0 ] && rm -f "$out"
+    return $status
+}
+
+[ $# -eq 0 ] && usage
+
+# الحذف
+if [ "$1" = "-r" ]; then
+    [ -z "$2" ] && usage
+    slug=$(slugify "$2")
+    # اسم عربي: ابحث عنه داخل الملفات
+    if [ -z "$slug" ]; then
+        file=$(grep -lxF "Name=$2" "$apps"/wta-*.desktop 2>/dev/null | head -n 1)
+        slug=${file##*/wta-}
+        slug=${slug%.desktop}
+    fi
+    if [ -z "$slug" ] || { [ ! -e "$apps/wta-$slug.desktop" ] && [ ! -e "$icons/$slug.png" ]; }; then
+        echo "App not found"
+        exit 1
+    fi
+    rm -f "$apps/wta-$slug.desktop" "$icons/$slug.png"
+    echo "App removed"
+    exit 0
+fi
+
+[ $# -lt 2 ] && usage
+
+name="$1"
+url="$2"
+icon_src="$3"
+
+# إضافة https إن لم يكن موجودًا
+case "$url" in
+    http://*|https://*) ;;
+    *) url="https://$url" ;;
+esac
+
+origin=$(echo "$url" | sed -E 's|^(https?://[^/]*).*|\1|')
+domain=${origin#*://}
+domain=${domain%%:*}
+domain=${domain#www.}
+
+# إذا لم يبق شيء من الاسم نستخدم الدومين
+slug=$(slugify "$name")
+[ -z "$slug" ] && slug=$(slugify "$domain")
+
+mkdir -p "$apps" "$icons"
+out="$icons/$slug.png"
+found=0
+
+# الأيقونة
+if [ -n "$icon_src" ]; then
+    try_icon "$icon_src" && found=1
+else
+    page=$(curl -fsSL --max-time 10 "$url" 2>/dev/null)
+    for rel in 'apple-touch-icon(-precomposed)?' '(shortcut )?icon'; do
+        href=$(get_href "$rel")
+        [ -n "$href" ] && try_icon "$(full_url "$href")" && found=1 && break
+    done
+    [ $found -eq 0 ] && try_icon "$origin/favicon.ico" && found=1
+    [ $found -eq 0 ] && try_icon "https://www.google.com/s2/favicons?domain=$domain&sz=128" && found=1
+fi
+
+if [ $found -eq 1 ]; then
+    icon="$out"
+else
+    icon="web-browser"
+    echo "No icon found, using the generic icon"
+fi
+
+browser="${WTA_BROWSER:-chromium}"
+
+# ملف التطبيق
+cat > "$apps/wta-$slug.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$name
+Exec=$browser --app="${url//%/%%}" --ozone-platform-hint=auto
+Icon=$icon
+Terminal=false
+Categories=Network;
+EOF
+
+command -v update-desktop-database >/dev/null && update-desktop-database "$apps"
+
+echo "App created"
