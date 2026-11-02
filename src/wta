@@ -5,6 +5,7 @@ icons="$HOME/.local/share/icons/wta"
 
 usage() {
     echo "Usage: wta name url [icon]"
+    echo "To show list: wta -l"
     echo "To remove: wta -r name"
     exit 1
 }
@@ -47,6 +48,23 @@ try_icon() {
 }
 
 [ $# -eq 0 ] && usage
+
+# عرض قائمة التطبيقات
+if [ "$1" = "-l" ]; then
+    shopt -s nullglob
+    files=("$apps"/wta-*.desktop)
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "No apps found"
+        exit 0
+    fi
+    for f in "${files[@]}"; do
+        app_name=$(sed -n 's/^Name=//p' "$f")
+        app_url=$(sed -n 's/^Exec=.*--app="\([^"]*\)".*/\1/p' "$f")
+        app_url="${app_url//\%\%/%}"
+        echo "- $app_name ($app_url)"
+    done
+    exit 0
+fi
 
 # الحذف
 if [ "$1" = "-r" ]; then
