@@ -56,6 +56,12 @@ wta ملاحظاتي https://notion.so ~/Pictures/notion.png
 WTA_BROWSER=brave wta github github.com
 ```
 
+## عرض التطبيقات الموجودة (List)
+
+```
+wta -l
+```
+
 ## حذف تطبيق
 
 ```
