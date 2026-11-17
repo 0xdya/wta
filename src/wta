@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-VERSION="2.0.1"
+VERSION="2.0.2"
 apps="$HOME/.local/share/applications"
 icons="$HOME/.local/share/icons/wta"
 
@@ -400,15 +400,19 @@ case "${1:-}" in
     -h|--help)
         usage 0
         ;;
-    -l)
+    -l|--list)
         list_apps
         ;;
-    -r)
+    -r|--remove)
         [ -z "$2" ] && usage
         remove_app "$2"
         ;;
     -u|--update)
         update_app
+        ;;
+    -v|--version)
+        echo "wta $VERSION"
+        exit 0
         ;;
     *)
         [ $# -lt 2 ] && usage
