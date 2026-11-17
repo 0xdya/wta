@@ -1,30 +1,27 @@
 # WTA - Website To App
 
-سكربت bash بسيط يحوّل أي موقع ويب إلى تطبيق مستقل على سطح المكتب في لينكس، مع أيقونة -قابلة للتخصيص- تظهر في قائمة التطبيقات
+سكربت bash بسيط يحوّل أي موقع ويب إلى تطبيق مستقل على سطح مكتب لينكس، مع أيقونة قابلة للتخصيص تظهر في قائمة التطبيقات.
 
 ## المتطلبات
 
 - curl
-- imagemagick
-- chromium (يشتغل أيضًا على Brave أو Chrome أو Vivaldi المهم يدعم --app)
+- ImageMagick
+- Chromium أو أي متصفح مبني عليه مثل Brave, Vivaldi ... `المهم يدعم --app`
 
-## تثبيت المتطلبات:
+### تثبيت المتطلبات
 
-على Arch
-
-```
+**Arch**
+```bash
 sudo pacman -S curl imagemagick chromium
 ```
 
-على fedora
-
-```
+**Fedora**
+```bash
 sudo dnf install curl ImageMagick chromium
 ```
 
-على debian
-
-```
+**Debian / Ubuntu**
+```bash
 sudo apt install curl imagemagick chromium
 ```
 
@@ -37,41 +34,47 @@ chmod +x install.sh
 ./install.sh
 ```
 
-## الاستخدام الافتراضي
+## الاستخدام
+
+### الوضع التفاعلي
 
 ```bash
-wta youtube youtube.com
+wta
 ```
 
-## الاستخدام مع تخصيص الأيقونة
-(رابط صورة أو مسارها إذا لم تحدده، السكربت سيجلب أيقونة الموقع بنفسه إذا كان ممكن)
+1. اختر المتصفح.
+   ![اختيار المتصفح](img/1.png)
+2. اكتب اسم التطبيق.
+   ![اسم التطبيق](img/2.png)
+3. اكتب رابط الموقع.
+   ![رابط الموقع](img/3.png)
+4. حدّد مسار الأيقونة (اختياري).
+   ![الأيقونة](img/4.png)
+
+### الاستخدام السريع
 
 ```bash
-wta ملاحظاتي https://notion.so ~/Pictures/notion.png
+wta AppName URL [icon]
 ```
 
-## الاستخدام مع متصفح آخر
+لتحديد المتصفح:
 
 ```bash
-WTA_BROWSER=brave wta github github.com
+WTA_BROWSER=brave wta AppName URL [icon]
 ```
 
-## عرض التطبيقات الموجودة (List)
+## أوامر أخرى
 
-```
-wta -l
-```
+| الأمر | الوظيفة |
+|---|---|
+| `wta -l` | عرض التطبيقات التي أنشأتها |
+| `wta -u` | تحديث الأداة |
+| `wta -r youtube` | حذف تطبيق محدد |
 
-## حذف تطبيق
+## إزالة الأداة
 
-```
-wta -r youtube
-```
-
-## حذف المشروع كامل
-
-```
+```bash
 ./uninstall.sh
 ```
 
-الأمر الأول يحذف تطبيقًا أنشأته، والثاني يزيل الأداة (احذف تطبيقاتك أولًا قبل إزالة الأداة)
+> احذف تطبيقاتك أولًا بـ `wta -r` قبل إزالة الأداة.
