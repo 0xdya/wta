@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-VERSION="2.0.2"
+VERSION="2.0.3"
 apps="$HOME/.local/share/applications"
 icons="$HOME/.local/share/icons/wta"
 
@@ -59,13 +59,19 @@ get_href() {
 
 # تحميل الصورة وتحويلها إلى PNG
 try_icon() {
+    # تنظيف المسار
+    local src="$1" tmp status
+    src="${src#\'}"; src="${src%\'}"
+    src="${src#\"}"; src="${src%\"}"
+    src="${src//\\ / }"
     tmp=$(mktemp)
-    if [ -f "$1" ]; then
-        cp "$1" "$tmp"
+    if [ -f "$src" ]; then
+        cp "$src" "$tmp"
     else
-        curl -fsSL --max-time 10 -o "$tmp" "$1" 2>/dev/null
+        curl -fsSL --max-time 10 -o "$tmp" "$src" 2>/dev/null || { rm -f "$tmp"; return 1; }
     fi
-    "${im_cmd[@]}" "${tmp}[0]" -background none -resize 256x256 "$out" 2>/dev/null
+    "${im_cmd[@]}" "${tmp}[0]" -background none -resize 256x256 "$out" 2>/dev/null \
+      || "${im_cmd[@]}" -background none "svg:$tmp" -resize 256x256 "$out" 2>/dev/null
     status=$?
     rm -f "$tmp"
     [ $status -ne 0 ] && rm -f "$out"
