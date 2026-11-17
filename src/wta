@@ -1,18 +1,42 @@
 #!/usr/bin/env bash
-
+# v2.0.0
 apps="$HOME/.local/share/applications"
 icons="$HOME/.local/share/icons/wta"
 
+# المتصفحات المبنية على Chromium (تدعم --app)
+chromium_based='chromium|chrome|brave|vivaldi|edge|opera|thorium|ungoogled|helium-browser'
+
+desktop_dirs=(
+    "$HOME/.local/share/applications"
+    /usr/local/share/applications
+    /usr/share/applications
+    /var/lib/flatpak/exports/share/applications
+    "$HOME/.local/share/flatpak/exports/share/applications"
+    /var/lib/snapd/desktop/applications
+)
+
 usage() {
-    echo "Usage: wta name url [icon]"
+    echo "Usage: wta                  (interactive mode)"
+    echo "       wta name url [icon]"
     echo "To show list: wta -l"
     echo "To remove: wta -r name"
-    exit 1
+    echo ""
+    echo "Browser: uses your default browser if it is Chromium-based."
+    echo "Override with: WTA_BROWSER=brave wta name url"
+    exit "${1:-1}"
 }
 
-# اسم الملف: حروف لاتينية صغيرة وشرطات
+# اسم الملف
 slugify() {
     echo "$1" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//'
+}
+
+# ازالة المسافات
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    echo "$s"
 }
 
 # تحويل الرابط النسبي إلى رابط كامل
@@ -40,17 +64,100 @@ try_icon() {
     else
         curl -fsSL --max-time 10 -o "$tmp" "$1" 2>/dev/null
     fi
-    magick "${tmp}[0]" -background none -resize 256x256 "$out" 2>/dev/null
+    "${im_cmd[@]}" "${tmp}[0]" -background none -resize 256x256 "$out" 2>/dev/null
     status=$?
     rm -f "$tmp"
     [ $status -ne 0 ] && rm -f "$out"
     return $status
 }
 
-[ $# -eq 0 ] && usage
+# استخراج أمر التشغيل من سطر Exec وإزالة رموز مثل %U @...
+clean_exec() {
+    sed -E 's/ %[a-zA-Z]//g; s/ @@u?//g'
+}
+
+# البحث عن المتصفحات المبنية على Chromium المثبتة في النظام
+find_browsers() {
+    local dir f entry name cmd seen=""
+    b_names=()
+    b_cmds=()
+
+    for dir in "${desktop_dirs[@]}"; do
+        [ -d "$dir" ] || continue
+        for f in "$dir"/*.desktop; do
+            [ -f "$f" ] || continue
+
+            entry=$(awk '/^\[/{s=($0=="[Desktop Entry]")} s' "$f")
+
+            echo "$entry" | grep -q '^NoDisplay=true' && continue
+            echo "$entry" | grep -q '^Categories=.*WebBrowser' || continue
+
+            cmd=$(echo "$entry" | sed -n 's/^Exec=//p' | head -n 1 | clean_exec)
+            echo "$cmd" | grep -qiE "$chromium_based" || continue
+
+            name=$(echo "$entry" | sed -n 's/^Name=//p' | head -n 1)
+            [ -z "$name" ] && continue
+
+            # تجاهل المتصفح المكرر (نفس الاسم في أكثر من مسار)
+            case "$seen" in *"|$name|"*) continue ;; esac
+            seen="$seen|$name|"
+
+            b_names+=("$name")
+            b_cmds+=("$cmd")
+        done
+    done
+}
+
+# اكتشاف المتصفح الافتراضي وجعله أمر تشغيل
+detect_browser() {
+    local desktop_file cmd candidate dir
+
+    # المتصفح الذي اختاره المستخدم في الوضع التفاعلي
+    if [ -n "$chosen_browser" ]; then
+        echo "$chosen_browser"
+        return
+    fi
+
+    # المتغير اليدوي له الأولوية
+    if [ -n "$WTA_BROWSER" ]; then
+        echo "$WTA_BROWSER"
+        return
+    fi
+
+    # المتصفح الافتراضي من النظام
+    desktop_file=$(xdg-settings get default-web-browser 2>/dev/null)
+    if [ -z "$desktop_file" ]; then
+        desktop_file=$(xdg-mime query default x-scheme-handler/https 2>/dev/null)
+    fi
+
+    if [ -n "$desktop_file" ]; then
+        for dir in "${desktop_dirs[@]}"; do
+            if [ -f "$dir/$desktop_file" ]; then
+                cmd=$(sed -n 's/^Exec=//p' "$dir/$desktop_file" | head -n 1 | clean_exec)
+                # تحقق أنه مبني ع Chromium
+                if echo "$cmd" | grep -qiE "$chromium_based"; then
+                    echo "$cmd"
+                    return
+                fi
+                break
+            fi
+        done
+    fi
+
+    for candidate in chromium chromium-browser google-chrome-stable google-chrome \
+                     brave brave-browser vivaldi microsoft-edge-stable; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            echo "$candidate"
+            return
+        fi
+    done
+
+    echo "chromium"
+}
 
 # عرض قائمة التطبيقات
-if [ "$1" = "-l" ]; then
+list_apps() {
+    local files f app_name app_url
     shopt -s nullglob
     files=("$apps"/wta-*.desktop)
     if [ ${#files[@]} -eq 0 ]; then
@@ -64,76 +171,97 @@ if [ "$1" = "-l" ]; then
         echo "- $app_name ($app_url)"
     done
     exit 0
-fi
+}
 
 # الحذف
-if [ "$1" = "-r" ]; then
-    [ -z "$2" ] && usage
-    slug=$(slugify "$2")
-    # اسم عربي: ابحث عنه داخل الملفات
-    if [ -z "$slug" ]; then
-        file=$(grep -lxF "Name=$2" "$apps"/wta-*.desktop 2>/dev/null | head -n 1)
-        slug=${file##*/wta-}
-        slug=${slug%.desktop}
+remove_app() {
+    local target="$1" slug file icon
+
+    slug=$(slugify "$target")
+    file="$apps/wta-$slug.desktop"
+
+    # البحث داخل الملفات في حالة الاسم بلغة عربية أو...
+    if [ -z "$slug" ] || [ ! -f "$file" ]; then
+        file=$(grep -lxF "Name=$target" "$apps"/wta-*.desktop 2>/dev/null | head -n 1)
     fi
-    if [ -z "$slug" ] || { [ ! -e "$apps/wta-$slug.desktop" ] && [ ! -e "$icons/$slug.png" ]; }; then
+
+    if [ -z "$file" ] || [ ! -f "$file" ]; then
         echo "App not found"
         exit 1
     fi
-    rm -f "$apps/wta-$slug.desktop" "$icons/$slug.png"
+
+    # مسار الأيقونة يؤخذ من الملف نفسه
+    icon=$(sed -n 's/^Icon=//p' "$file" | head -n 1)
+    rm -f "$file"
+    case "$icon" in
+        "$icons"/*) rm -f "$icon" ;;
+    esac
+
     echo "App removed"
     exit 0
-fi
+}
 
-[ $# -lt 2 ] && usage
+# إنشاء التطبيق
+create_app() {
+    local name="$1" url="$2" icon_src="$3"
+    local domain slug rel href icon browser
 
-name="$1"
-url="$2"
-icon_src="$3"
+    # إضافة https إن لم يكن موجودًا
+    case "$url" in
+        http://*|https://*) ;;
+        *) url="https://$url" ;;
+    esac
 
-# إضافة https إن لم يكن موجودًا
-case "$url" in
-    http://*|https://*) ;;
-    *) url="https://$url" ;;
-esac
+    origin=$(echo "$url" | sed -E 's|^(https?://[^/]*).*|\1|')
+    domain=${origin#*://}
+    domain=${domain%%:*}
+    domain=${domain#www.}
 
-origin=$(echo "$url" | sed -E 's|^(https?://[^/]*).*|\1|')
-domain=${origin#*://}
-domain=${domain%%:*}
-domain=${domain#www.}
+    # إذا لم يبق شيء من الاسم نستخدم الدومين
+    slug=$(slugify "$name")
+    [ -z "$slug" ] && slug=$(slugify "$domain")
 
-# إذا لم يبق شيء من الاسم نستخدم الدومين
-slug=$(slugify "$name")
-[ -z "$slug" ] && slug=$(slugify "$domain")
+    # أداة تحويل الصور: ImageMagick 7 (magick) أو 6 (convert)
+    if command -v magick >/dev/null 2>&1; then
+        im_cmd=(magick)
+    elif command -v convert >/dev/null 2>&1; then
+        im_cmd=(convert)
+    else
+        im_cmd=()
+    fi
 
-mkdir -p "$apps" "$icons"
-out="$icons/$slug.png"
-found=0
+    mkdir -p "$apps" "$icons"
+    out="$icons/$slug.png"
+    found=0
 
-# الأيقونة
-if [ -n "$icon_src" ]; then
-    try_icon "$icon_src" && found=1
-else
-    page=$(curl -fsSL --max-time 10 "$url" 2>/dev/null)
-    for rel in 'apple-touch-icon(-precomposed)?' '(shortcut )?icon'; do
-        href=$(get_href "$rel")
-        [ -n "$href" ] && try_icon "$(full_url "$href")" && found=1 && break
-    done
-    [ $found -eq 0 ] && try_icon "$origin/favicon.ico" && found=1
-    [ $found -eq 0 ] && try_icon "https://www.google.com/s2/favicons?domain=$domain&sz=128" && found=1
-fi
+    # الأيقونة
+    if [ ${#im_cmd[@]} -eq 0 ]; then
+        echo "ImageMagick not found, using the generic icon"
+    elif [ -n "$icon_src" ]; then
+        icon_src="${icon_src/#\~/$HOME}"
+        try_icon "$icon_src" && found=1
+    else
+        page=$(curl -fsSL --max-time 10 "$url" 2>/dev/null)
+        for rel in 'apple-touch-icon(-precomposed)?' '(shortcut )?icon'; do
+            href=$(get_href "$rel")
+            [ -n "$href" ] && try_icon "$(full_url "$href")" && found=1 && break
+        done
+        [ $found -eq 0 ] && try_icon "$origin/favicon.ico" && found=1
+        [ $found -eq 0 ] && try_icon "https://www.google.com/s2/favicons?domain=$domain&sz=128" && found=1
+    fi
 
-if [ $found -eq 1 ]; then
-    icon="$out"
-else
-    icon="web-browser"
-    echo "No icon found, using the generic icon"
-fi
+    if [ $found -eq 1 ]; then
+        icon="$out"
+    else
+        icon="web-browser"
+        [ ${#im_cmd[@]} -ne 0 ] && echo "No icon found, using the generic icon"
+    fi
 
-browser="${WTA_BROWSER:-chromium}"
+    browser=$(detect_browser)
+    echo -e "\n Using browser: $browser"
 
-# ملف التطبيق
-cat > "$apps/wta-$slug.desktop" <<EOF
+    # ملف التطبيق
+    cat > "$apps/wta-$slug.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$name
@@ -143,6 +271,85 @@ Terminal=false
 Categories=Network;
 EOF
 
-command -v update-desktop-database >/dev/null && update-desktop-database "$apps"
+    command -v update-desktop-database >/dev/null && update-desktop-database "$apps"
 
-echo "App created"
+    echo "App created"
+}
+
+# الوضع التفاعلي
+interactive() {
+    local n i name url icon_src
+
+    find_browsers
+    if [ ${#b_names[@]} -eq 0 ]; then
+        echo "No Chromium-based browser found"
+        exit 1
+    fi
+
+    echo "Choose a browser:"
+    for i in "${!b_names[@]}"; do
+        echo "  $((i + 1))) ${b_names[$i]}"
+    done
+
+    while true; do
+        if [ ${#b_names[@]} -eq 1 ]; then
+            echo -e "Browser number (Enter for ${b_names[0]}):"
+            read -er n
+            [ -z "$n" ] && n=1
+        else
+            echo -e "\n Browser number:"
+            read -er n
+        fi
+        n=$(trim "$n")
+        if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le ${#b_names[@]} ]; then
+            break
+        fi
+        echo "Invalid number"
+    done
+    chosen_browser="${b_cmds[$((n - 1))]}"
+
+    # الاسم
+    while true; do
+        echo -e "\n App name:"
+        read -er name
+        name=$(trim "$name")
+        [ -n "$name" ] && break
+        echo "Name cannot be empty"
+    done
+
+    # الرابط
+    while true; do
+        echo -e "\n URL:"
+        read -er url
+        url=$(trim "$url")
+        [ -n "$url" ] && break
+        echo "URL cannot be empty"
+    done
+
+    # الأيقونة اختيارية
+    echo -e "\n Icon (path or URL), or Enter to fetch automatically:"
+    read -er icon_src
+    icon_src=$(trim "$icon_src")
+
+    create_app "$name" "$url" "$icon_src"
+}
+
+case "${1:-}" in
+    "")
+        interactive
+        ;;
+    -h|--help)
+        usage 0
+        ;;
+    -l)
+        list_apps
+        ;;
+    -r)
+        [ -z "$2" ] && usage
+        remove_app "$2"
+        ;;
+    *)
+        [ $# -lt 2 ] && usage
+        create_app "$1" "$2" "$3"
+        ;;
+esac
