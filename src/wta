@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v2.0.0
+VERSION="2.0.1"
 apps="$HOME/.local/share/applications"
 icons="$HOME/.local/share/icons/wta"
 
@@ -20,6 +20,7 @@ usage() {
     echo "       wta name url [icon]"
     echo "To show list: wta -l"
     echo "To remove: wta -r name"
+    echo "To update: wta -u"
     echo ""
     echo "Browser: uses your default browser if it is Chromium-based."
     echo "Override with: WTA_BROWSER=brave wta name url"
@@ -276,6 +277,64 @@ EOF
     echo "App created"
 }
 
+update_app() {
+    local repo="${WTA_REPO:-https://raw.githubusercontent.com/0xdya/wta/main}"
+    local bin="$HOME/.local/bin/wta"
+    local tmp remote_ver dl_ver
+
+    command -v curl >/dev/null 2>&1 || { echo "curl is required"; exit 1; }
+
+    # جلب الإصدار
+    remote_ver=$(curl -fsSL --max-time 10 -r 0-2048 "$repo/src/wta" \
+        | sed -n 's/^VERSION="\([^"]*\)"/\1/p' | head -n 1)
+
+    if [ -z "$remote_ver" ]; then
+        echo "Update failed: unable to determine remote version"
+        exit 1
+    fi
+
+    # مقارنة الإصدارات
+    if [ "$remote_ver" = "$VERSION" ]; then
+        echo "Already up to date (v$VERSION)"
+        exit 0
+    fi
+
+    # تحميل النسخة الجديدة بالكامل
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT
+
+    if ! curl -fsSL --max-time 30 "$repo/src/wta" -o "$tmp"; then
+        echo "Update failed: unable to download WTA"
+        exit 1
+    fi
+
+    dl_ver=$(sed -n 's/^VERSION="\([^"]*\)"/\1/p' "$tmp" | head -n 1)
+    if [ "$dl_ver" != "$remote_ver" ]; then
+        echo "Update failed: version mismatch after download"
+        exit 1
+    fi
+
+    if ! bash -n "$tmp"; then
+        echo "Update failed: downloaded script is invalid"
+        exit 1
+    fi
+
+    # نسخة احتياطية
+    [ -f "$bin" ] && cp -f "$bin" "$bin.bak"
+
+    chmod 755 "$tmp"
+    mkdir -p "$(dirname "$bin")"
+    if ! mv -f "$tmp" "$bin"; then
+        echo "Update failed: unable to install WTA"
+        exit 1
+    fi
+
+    trap - EXIT
+    echo "Updated: v$VERSION -> v$remote_ver"
+    echo "Restart or run: wta --help"
+    exit 0
+}
+
 # الوضع التفاعلي
 interactive() {
     local n i name url icon_src
@@ -347,6 +406,9 @@ case "${1:-}" in
     -r)
         [ -z "$2" ] && usage
         remove_app "$2"
+        ;;
+    -u|--update)
+        update_app
         ;;
     *)
         [ $# -lt 2 ] && usage
